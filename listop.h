@@ -7,21 +7,23 @@ Activity:
  Date         Author           Comments
  Oct.09,2001  tgeorge          Created.
 ===========================================================================*/
-#ifndef M_H
-#define M_H
+#ifndef LOP_H
+#define LOP_H
 
 #include<string.h>
+#include "options.h"
 
 /**********************************************************
 list operations a.k.a. lop
 **********************************************************/
 
 #define SIZET size_t
-#define WORDBOUNDARY_DIV 0x0004
 #define GTFAILURE -1
 #define GTSUCCESS 0
 
 enum LISTOP_STATUS {LISTOP_SUCCESS, LISTOP_FAILURE};
+
+typedef int LRET;
 
 /*sizeof(listhdr) is required to end on a word boundary*/
 typedef struct listhdr {
@@ -32,23 +34,36 @@ typedef struct listhdr {
 typedef struct poolhdr {
 	LISTHDR *pfreelist;
 	LISTHDR *palloclist;
-	int count;
-	int freecount;
+	uint32 objsize; /*size of each object in pool, not including LISTHDR*/
+	uint32 count; /*count of all elements in pool*/
+	uint32 freecount;	/*count of free elements in pool*/
+#ifdef PDBG_ON
+    uint32 lowat; /*remembers minimum attained value for freecount*/
+#endif
+	uint32 msize; /*size of memory used by this pool*/
+	void *mptr; /*ptr. to memory supplied to this pool, for its creation*/
+	void *endptr; /*address of last of the consecutive bytes used = (char *)WALIGN(mptr)+msize*/
 } POOLHDR;
 
 /*function prototypes*/
-POOLHDR *lop_allocpool(SIZET objectsize, int count, void *pplacement);
+uint32 lop_getpoolsize(SIZET adjobjectsize, uint32 count);
+POOLHDR *lop_allocpool(SIZET objectsize, uint32 count, void *pplacement);
 void *lop_alloc(POOLHDR *ppool);
 void *lop_allocarray(POOLHDR *ppool, int arraysize);
-int lop_releasepool(POOLHDR *pool);
-int lop_release(POOLHDR *ppool, void *pobj);
-int lop_checkpool(POOLHDR *ppool);
+LRET lop_releasepool(POOLHDR *pool);
+LRET lop_release(POOLHDR *ppool, void *pobj);
+LRET lop_checkpool(POOLHDR *ppool);
 LISTHDR *lop_push(LISTHDR **plist, void *pobj);
 void *lop_pop(LISTHDR **plist);
 LISTHDR *lop_queue(LISTHDR **plist, void *pobj);
+void * lop_remove(LISTHDR **plist, void *pobj);
 void *lop_dequeue(LISTHDR **plist);
+void * lop_insert(LISTHDR **plist, void *pobj, void *pobj_marker);
 void *lop_getnext(LISTHDR *plist, void *pobj);
-int lop_listlen(LISTHDR *plist);
+uint32 lop_listlen(LISTHDR *plist);
+LISTHDR * lop_findprev(LISTHDR *pcurrlhdr);
 void *lop_delink(LISTHDR **plist, void *pcurrobj, void *pprevobj);
 
+void *lop_malloc(int32 size);
+void lop_free(void *ptr);
 #endif

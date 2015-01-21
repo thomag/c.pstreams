@@ -1,13 +1,13 @@
 CC = gcc
 CCFLAGS += -g
-SRCS = 	listop.c pstreams.c pstreams_echo.c tcpdev.c stdmod.c udpdev.c echotest.c
+SRCS = 	envlinux.c listop.c pstreams.c pstreams_echo.c saw.c stdmod.c tcpdev.c test.c testutil.c udpdev.c util.c
 
 OBJS =		$(SRCS:.c=.o)
 HDRS =		$(SRCS:.c=.h)
 
 LIBS =
 
-TARGET =	echo_test
+TARGET =	test
 
 
 all:	$(CHECKHDR) $(TARGET)

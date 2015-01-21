@@ -6,11 +6,14 @@ Description: List Operations. Simple, efficient memory management using lists.
 Activity:
  Date         Author           Comments
  Oct.09,2001  tgeorge          Created.
+
 ===========================================================================*/
 #include<stdio.h>
 #include<stdlib.h>
 #include<string.h>
-#include<assert.h>
+#include "options.h"
+#include "env.h"
+#include"assert.h"
 /*#define MMGR_DEBUG 1*/
 #include "listop.h"
 
@@ -27,11 +30,11 @@ by the actual object.
  |  o-------o          o-------o               o-------o __/
  o->| pnext | -------> | pnext | ---...--->    | pnext |  
     |-------|          |-------|               |-------|<-              
-    |       |          |       |               |       |  \       
-    | DATA  |          | DATA  |               | DATA  |   \       
-    o-------o          o-------o               o-------o    \       
-                                                             \       
-                                                              \   
+    |       |          |       |               |       |  \
+    | DATA  |          | DATA  |               | DATA  |   \
+    o-------o          o-------o               o-------o    \
+                                                             \
+                                                              \
                                                      o----------o
                                                      | LIST HDR |
                                                      |          |
@@ -51,8 +54,6 @@ by the actual object.
 /*given the pool object step to the pool header*/
 #define GETLISTHDR(pobj)  ((LISTHDR *)((char *)(pobj) - sizeof(LISTHDR)))
 
-/*round up the count of bytes to make sure it falls on a word boundary - TODO make more efficient*/
-#define ADJUSTEDOBJSIZE(objectsize)   ((objectsize) + WORDBOUNDARY_DIV - ((objectsize) % WORDBOUNDARY_DIV));
 
 /******************************************************************************
 Name: lop_getpoolsize
@@ -62,9 +63,9 @@ Parameters: adjobjectsize: each objects size in bytes
             count: count of such objects to be in pool
 Caveats: 
 ******************************************************************************/
-int lop_getpoolsize(SIZET adjobjectsize, int count)
+uint32 lop_getpoolsize(SIZET objectsize, uint32 count)
 {
-    return sizeof(POOLHDR) + (adjobjectsize+sizeof(LISTHDR))*count;
+    return sizeof(POOLHDR) + (WALIGN(objectsize)+sizeof(LISTHDR))*count;
 }
 
 /******************************************************************************
@@ -74,14 +75,17 @@ Purpose:  Allocates a chunk of memory organized as a LIST of
 usage :
 Parameters:
 Caveats: 
+    TODO: lop_allocpool's argument list should include a structrure like FREE_RTN
+and should be stored in POOLHDR. This would be used to free pplacement at release.
+Currently, the endgame is not played out well - lop_free is called at all times.
 ******************************************************************************/
-POOLHDR *lop_allocpool(SIZET objectsize, int count, void *pplacement)
+POOLHDR *lop_allocpool(SIZET objectsize, uint32 count, void *pplacement)
 {
-    POOLHDR *ppool;
-    LISTHDR *plhdr;
-    int adjobjectsize;
-    int allocsize;
-    int i;/*temp - for loop only*/
+    POOLHDR *ppool;/*pointer to pool*/
+    LISTHDR *plhdr;/*pointer to list header*/
+    uint32 adjobjectsize; /*object size after word alignment*/
+    uint32 allocsize; /*total memory needed for pool*/
+    uint32 i;/*temp - for loop only*/
 
     if(!objectsize || !count)
     {
@@ -89,32 +93,47 @@ POOLHDR *lop_allocpool(SIZET objectsize, int count, void *pplacement)
     }
 
     /*adjust size of object to end on word boundaries*/
-    adjobjectsize = ADJUSTEDOBJSIZE(objectsize);
+    adjobjectsize = WALIGN(objectsize);
+    ASSERT(objectsize == WALIGN(objectsize)); /*not really needed - but...*/
     allocsize = lop_getpoolsize(adjobjectsize, count);
 
     if(pplacement)
     {
         /* pplacement should point to atleast allocsize bytes of allocated memory*/
-		/*TODO: adjust pplacement to fall on a word boundary*/
-        ppool = (POOLHDR *)pplacement;
+        /*adjust pplacement to fall on a word boundary*/
+        ppool = (POOLHDR *)WALIGN((unsigned long)pplacement);
     }
     else
     {
-        ppool = (POOLHDR *)malloc(allocsize);
+        ppool = (POOLHDR *)lop_malloc(allocsize);
     }
 
     memset(ppool, 0, allocsize);
 
+    /*the following assignments are some statistics used during debugging*/
+    ppool->mptr = pplacement;
+    ppool->msize = allocsize;
+    ppool->objsize = adjobjectsize;
+    ppool->endptr = (char *)ppool+allocsize;
+
     ppool->pfreelist = (LISTHDR *)GETPOOLOBJ(ppool);
     ppool->freecount = ppool->count = count;
 
+#ifdef PDBG_ON
+    ppool->lowat = ppool->freecount;
+#endif
+
     plhdr = ppool->pfreelist;
-    for(i=0; i<count; i++)
+    for(i=1; i<count; i++) /*count starts with 1 since, plhdr has been assigned first one*/
     {
-        plhdr->pnext = (LISTHDR *)((char *)plhdr+adjobjectsize);
+        ASSERT((char *)plhdr >= (char *)ppool->mptr); /*bounds check*/
+        ASSERT((char *)plhdr < (char *)ppool->endptr);/*bounds check*/
+
+        plhdr->pnext = (LISTHDR *)((char *)plhdr+sizeof(LISTHDR)+adjobjectsize);
         plhdr = plhdr->pnext;
+
 #ifdef MMGR_DEBUG
-        if((char*)plhdr >= (char *)ppool->pfreelist + allocsize)
+        if((char*)plhdr + adjobjectsize >= (char *)ppool->endptr)
         {
             printf("overflowing:\n");
             printf("start: 0x%x end: 0x%x step: 0x%x "
@@ -122,19 +141,14 @@ POOLHDR *lop_allocpool(SIZET objectsize, int count, void *pplacement)
                 ppool->pfreelist, plhdr, adjobjectsize,
                 ((int)plhdr - (int)ppool->pfreelist),
                 allocsize, count);
+            ASSERT(0);
         }
-
-
-        printf("%d - start: 0x%x end: 0x%x step: 0x%x "
-            "end-start: 0x%x allocsize: 0x%x, count: %d\n",
-            i,
-            ppool->pfreelist, plhdr, adjobjectsize,
-            ((int)plhdr - (int)ppool->pfreelist),
-            allocsize, count);
 #endif
 
     }
     plhdr->pnext = ppool->pfreelist; /*circular link list*/
+
+    ASSERT(lop_checkpool(ppool) == LISTOP_SUCCESS);
 
     return ppool;
 }
@@ -145,7 +159,7 @@ Purpose:
 Parameters:
 Caveats: 
 ******************************************************************************/
-int
+LRET
 lop_releasepool(POOLHDR *pool)
 {
     /*TODO - object size, count and placement in pool
@@ -153,8 +167,11 @@ lop_releasepool(POOLHDR *pool)
      * memory to NULLs.
      */
 
-    /*TODO - do only if not placement(stored in pool)*/
-    free(pool);
+    if(pool && pool->mptr)
+    {
+        /*do only if not placement(stored in pool)*/
+        lop_free(pool);
+    }
 
     return LISTOP_SUCCESS;
 }
@@ -167,31 +184,53 @@ Caveats:
 ******************************************************************************/
 void *lop_alloc(POOLHDR *ppool)
 {
-    LISTHDR *plhdr;
+    LISTHDR *plhdr; /*allocated object*/
 
     if(!ppool)
     {
         return NULL;
     }
 
-    assert(ppool->pfreelist);
+    /*debug mode*/
+    ASSERT(lop_checkpool(ppool) == LISTOP_SUCCESS);
 
-    if(ppool->pfreelist->pnext == ppool->pfreelist)
+    if(!ppool->pfreelist)
     {
-        assert(ppool->freecount == 0);
+        ASSERT(ppool->freecount == 0);
 
         return NULL; /*empty*/
     }
 
-    plhdr = ppool->pfreelist->pnext;/*give the first one*/
+    /*
+     *Allocate a free object from head of list.
+     *Since this is a circular list the following
+     *assignment works even if this is the last object
+     *in pool
+     */
+    plhdr = ppool->pfreelist->pnext;
 
-    ppool->pfreelist->pnext = plhdr->pnext;
+    if(ppool->pfreelist == ppool->pfreelist->pnext)
+    {
+        /*last object was allocated now*/
+        ppool->pfreelist = NULL; 
+    }
+    else
+    {
+        ppool->pfreelist->pnext = plhdr->pnext;
+    }
+
     plhdr->pnext = NULL; /*init for safety*/
 
-
-	assert(ppool->freecount >=0);
+    ASSERT(ppool->freecount >=0);
     ppool->freecount--; /*update count in parallel - just for safety*/
-    assert(ppool->freecount >=0);
+    ASSERT(ppool->freecount >=0);
+
+#ifdef PDBG_ON
+    ppool->lowat = MIN(ppool->lowat, ppool->freecount);
+#endif
+    
+    /*debug mode*/
+    ASSERT(lop_checkpool(ppool) == LISTOP_SUCCESS);
 
     return GETLISTOBJ(plhdr);
 }
@@ -210,8 +249,8 @@ lop_push(LISTHDR **plist, void *pobj)
 
     plhdr = GETLISTHDR(pobj);
 
-    assert(plhdr->pnext == NULL);
-    assert(plist);
+    ASSERT(plhdr->pnext == NULL);
+    ASSERT(plist);
 
     /*add to front of circular list*/
     if(*plist)
@@ -239,7 +278,7 @@ lop_pop(LISTHDR **plist)
 {
     LISTHDR *plhdr;
 
-    assert(plist);
+    ASSERT(plist);
 
     if(!*plist)
     {
@@ -278,8 +317,8 @@ lop_queue(LISTHDR **plist, void *pobj)
 
     plhdr = GETLISTHDR(pobj);
 
-    assert(plhdr->pnext == NULL);
-    assert(plist);
+    ASSERT(plhdr->pnext == NULL);
+    ASSERT(plist);
 
     /*add to tail of circular list*/
     if(*plist)
@@ -311,9 +350,115 @@ lop_dequeue(LISTHDR **plist)
     return lop_pop(plist);
 }
 
+/******************************************************************************
+Name:  lop_insert
+Purpose: insert element into list after given marker obj
+Parameters:
+Caveats: 
+******************************************************************************/
+void *
+lop_insert(LISTHDR **plist, void *pobj, void *pobj_marker)
+{
+    if(!pobj_marker)
+    {
+        /*goes to head of queue*/
+        lop_push(plist, pobj);
+    }
+    else
+    {
+        LISTHDR *plhdr_obj;
+        LISTHDR *plhdr_marker;
+
+        plhdr_obj = GETLISTHDR(pobj);
+        plhdr_marker = GETLISTHDR(pobj_marker);
+
+        if(*plist == plhdr_marker)
+        {
+            /*marker is the tail*/
+            lop_queue(plist, pobj);
+        }
+        else
+        {
+            plhdr_obj->pnext = plhdr_marker->pnext;
+            plhdr_marker->pnext = plhdr_obj;
+        }
+    }
+
+    return *plist;
+}
+
 void *lop_allocarray(POOLHDR *ppool, int arraysize)
 {
+    ppool=NULL; /*unused*/
+    arraysize=0;/*unused*/
     return NULL; /*TODO*/
+}
+
+/******************************************************************************
+Name: lop_remove
+Purpose: 
+  removes given element from list
+Parameters:
+Caveats: 
+******************************************************************************/
+void *
+lop_remove(LISTHDR **plist, void *pobj)
+{
+    LISTHDR *pcurrobjlhdr=NULL; /*plhdr corr. to pobj*/
+    LISTHDR *pprevobjlhdr=NULL; /*finally holds plhdr previous to pcurrobjlhdr*/
+
+    ASSERT(plist);
+
+    pcurrobjlhdr = GETLISTHDR(pobj);
+
+   /*
+    * optimization : often item to be removed is the head. lop_pop() 
+    * is best for such cases
+    */
+   if((*plist)->pnext == pcurrobjlhdr)
+   {
+       	return lop_pop(plist);
+   }
+   /*
+    * iterate thru the list until pcurrobjlhdr
+    * and then remove it. 
+    * First find pprevobjlhdr, so we can rethread
+    */
+
+    pprevobjlhdr=*plist; /*point at tail*/
+    do
+    {
+        if(pprevobjlhdr->pnext == pcurrobjlhdr)
+        {
+            break; /*found it*/
+        }
+        pprevobjlhdr = pprevobjlhdr->pnext; /*advance*/
+    }while(pprevobjlhdr != *plist);
+
+    /*
+     *now rethread list omitting the delinked element
+     */
+    if(pprevobjlhdr->pnext == pcurrobjlhdr)
+    {
+        /*NOOP for single element list*/
+        pprevobjlhdr->pnext = pcurrobjlhdr->pnext;
+          
+        pcurrobjlhdr->pnext = NULL;/*for safety*/
+
+           if(pcurrobjlhdr == pprevobjlhdr)/*single element list?*/
+           {
+               *plist = NULL; /*empty list*/
+           }
+        else if(*plist == pcurrobjlhdr) /*the element delinked is the tail*/
+        {
+            /*need to update tail*/
+            *plist = pprevobjlhdr;
+        }
+
+        return pobj;
+    }
+
+    return  NULL; /*failed to locate pobj in list*/
 }
 
 /******************************************************************************
@@ -330,10 +475,19 @@ lop_delink(LISTHDR **plist, void *pcurrobj, void *pprevobj)
     LISTHDR *pcurrobjlhdr=NULL;
     LISTHDR *pprevobjlhdr=NULL;
 
-    assert(plist);
+    ASSERT(plist);
 
     pcurrobjlhdr = GETLISTHDR(pcurrobj);
-    pprevobjlhdr = GETLISTHDR(pprevobj);/*prev object could be itself in case of single elt. list*/
+
+   /* Get prev obj listhdr - note : prev object could be itself in case of single elt. list*/
+    if(!pprevobj)
+    {
+        pprevobjlhdr = lop_findprev(pcurrobjlhdr);
+    }
+    else
+    {
+        pprevobjlhdr = GETLISTHDR(pprevobj);
+    }
 
     /*rethread. noop for single element list*/
     pprevobjlhdr->pnext = pcurrobjlhdr->pnext;
@@ -343,6 +497,11 @@ lop_delink(LISTHDR **plist, void *pcurrobj, void *pprevobj)
     if(pcurrobjlhdr == pprevobjlhdr)/*single element list?*/
     {
         *plist = NULL; /*empty list*/
+    }
+    else if(*plist == pcurrobjlhdr) /*the element delinked is the tail*/
+    {
+        /*need to update tail*/
+        *plist = pprevobjlhdr;
     }
 
     return pcurrobj;
@@ -354,29 +513,39 @@ Purpose:  release given object into given pool
 Parameters:
 Caveats: 
 ******************************************************************************/
-int
+LRET
 lop_release(POOLHDR *ppool, void *pobj)
 {
     LISTHDR *plhdr;
 
-	assert(ppool);
-	assert(pobj);
+    ASSERT(ppool);
+    ASSERT(pobj);
 
     if(!ppool || !pobj)
     {
         return LISTOP_FAILURE;
     }
 
-    assert(ppool->pfreelist);
-
-    assert(ppool->pfreelist->pnext);
-
     plhdr = GETLISTHDR(pobj);
 
-    assert(plhdr->pnext == NULL);
+    ASSERT((char *)plhdr >= (char *)ppool->mptr); /*bounds check*/
+    ASSERT((char *)plhdr < (char *)ppool->endptr);/*bounds check*/
 
-    plhdr->pnext = ppool->pfreelist->pnext;
-    ppool->pfreelist->pnext = plhdr;
+    ASSERT(plhdr->pnext == NULL);
+
+    if(ppool->pfreelist)
+    {
+        ASSERT(ppool->pfreelist->pnext);
+
+        plhdr->pnext = ppool->pfreelist->pnext;
+        ppool->pfreelist->pnext = plhdr;
+    }
+    else
+    {
+        /*first element*/
+        plhdr->pnext = plhdr;
+    }
+
     ppool->pfreelist = plhdr;
 
     ppool->freecount++;
@@ -408,14 +577,14 @@ lop_getnext(LISTHDR *plist, void *pobj)
 
     if(!pobj)
     {
-        return GETLISTOBJ(plist);
+        return GETLISTOBJ(plist->pnext); /*start from head*/
     }
 
     plhdr = GETLISTHDR(pobj);
 
     plhdr = plhdr->pnext;
 
-    if(plhdr == plist)
+    if(plhdr == plist->pnext) /*check against head*/
     {
         return NULL; /*end of list*/
     }
@@ -430,11 +599,11 @@ Purpose:
 Parameters:
 Caveats: 
 ******************************************************************************/
-int
+uint32
 lop_listlen(LISTHDR *plist)
 {
     LISTHDR *listiter=NULL;
-    int listlen=0;
+    uint32 listlen=0;
 
     if(!plist)
     {
@@ -452,25 +621,56 @@ lop_listlen(LISTHDR *plist)
 }
 
 /******************************************************************************
+Name: lop_findprev
+Purpose: for internal use. get the previous listhdr.
+Parameters:
+Caveats: 
+******************************************************************************/
+LISTHDR *
+lop_findprev(LISTHDR *pcurrlhdr)
+{
+    LISTHDR *pprevlhdr=NULL;
+    LISTHDR *listiter=NULL;
+
+   /*for a single element list - previous element is itself*/
+
+    for(listiter = pcurrlhdr->pnext;
+        listiter->pnext != pcurrlhdr;
+        listiter = listiter->pnext)
+    {
+        ;
+    }
+
+    ASSERT(listiter->pnext == pcurrlhdr);
+
+    pprevlhdr = listiter;
+
+    return pprevlhdr;
+}
+
+/******************************************************************************
 Name: lop_checkpool
 Purpose: debug mode checks
 Parameters:
 Caveats: 
 ******************************************************************************/
-int
+LRET
 lop_checkpool(POOLHDR *ppool)
 {
-    int count = 0;
+    uint32 count = 0;
     LISTHDR *plhdr=NULL;
 
-    assert(ppool);
-    assert(ppool->pfreelist);
+    ASSERT(ppool);
 
     plhdr = ppool->pfreelist;
 
-    for(count=0; count < ppool->count; count++)
+    for(count=0; plhdr && (count < ppool->count); count++)
     {
+        ASSERT((char *)plhdr >= (char *)ppool->mptr); /*bounds check*/
+        ASSERT((char *)plhdr < (char *)ppool->endptr);/*bounds check*/
+
         plhdr = plhdr->pnext;
+        ASSERT(plhdr); /*plhdr can't go NULL midway*/
         if(plhdr == ppool->pfreelist)
         {
             break;
@@ -478,9 +678,12 @@ lop_checkpool(POOLHDR *ppool)
     }
 
 #ifdef MMGR_DEBUG
-    printf("%x->freelist count = %d\n", ppool, count);
+    printf("pool address : %x\n", ppool);
+    printf("pool end : %x\n", ppool->endptr);
+    printf("%x->freelist count = %d\n", ppool, ppool->freecount);
 #endif
-    if(count >= ppool->count)
+
+    if(plhdr != ppool->pfreelist)
     {
         return LISTOP_FAILURE;
     }
@@ -488,3 +691,30 @@ lop_checkpool(POOLHDR *ppool)
     return LISTOP_SUCCESS;
 }
 
+/******************************************************************************
+Name: lop_malloc
+Purpose: front end of Operating System's malloc
+Parameters:
+Caveats: 
+******************************************************************************/
+void *
+lop_malloc(int32 size)
+{
+    ASSERT(0);
+    
+    size=0;/*unused*/
+    return NULL;
+}
+
+/******************************************************************************
+Name: lop_free
+Purpose: front end of Operating System's free()
+Parameters:
+Caveats: 
+******************************************************************************/
+void 
+lop_free(void *ptr)
+{
+    ptr=NULL;/*unused*/
+    return;
+}

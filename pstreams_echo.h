@@ -6,6 +6,7 @@ Description: pstreams echo module
 Activity:
  Date         Author           Comments
  Oct.09,2001  tgeorge          Created.
+
 ===========================================================================*/
 
 #ifndef ECHO_H
@@ -25,5 +26,6 @@ int
 echo_rsrvp(P_QUEUE *q);
 int
 echo_wsrvp(P_QUEUE *wq);
-
+P_BOOL
+echo_myctl(P_QUEUE *q, P_MSGB *msg);
 #endif
