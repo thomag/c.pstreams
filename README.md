@@ -6,4 +6,6 @@ See also http://cm.bell-labs.com/cm/cs/who/dmr/st.html
 
 Includes a sample module implementing the Stop-And-Wait protocol in saw.h/.c
 
+pstreams.pdf here has some additional explanation.
+
 Documentation to follow.
