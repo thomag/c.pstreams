@@ -6,6 +6,6 @@ See also http://cm.bell-labs.com/cm/cs/who/dmr/st.html
 
 Includes a sample module implementing the Stop-And-Wait protocol in saw.h/.c
 
-pstreams.pdf here has some additional explanation.
+Tracing test.c shows how the sample saw module is pushed into the stack and a test message loops thru (UDP loopback) the stack.
 
-Documentation to follow.
+pstreams.pdf here has some pictorial explanation.
